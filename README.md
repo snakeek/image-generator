@@ -2,13 +2,20 @@
 
 一个可部署的 AI 图片生成工具页，支持 `gpt-image-2`、Gemini / Nano Banana 文生图和图生图。
 
-页面通过同源代理调用图片接口，避免浏览器直连三方服务商时遇到 CORS 限制。`Base URL`、`API Key` 和服务商类型默认由页面输入，代理只负责转发和协议适配。
+页面通过同源代理调用图片接口，避免浏览器直连三方服务商时遇到 CORS 限制。页面只选择服务商类型和创作参数，`Base URL`、`API Key`、`Model` 都由后端按服务商分组配置。
 
 ## 本地运行
 
 ```bash
 cd /path/to/image-generator
-PORT=8787 node outputs/ai-image-proxy-server.mjs
+OPENAI_IMAGE_BASE_URL="https://ai98pro.xyz/v1" \
+OPENAI_IMAGE_API_KEY="your-openai-compatible-key" \
+OPENAI_IMAGE_MODEL="gpt-image-2" \
+GEMINI_IMAGE_BASE_URL="https://generativelanguage.googleapis.com/v1" \
+GEMINI_IMAGE_API_KEY="your-google-api-key" \
+GEMINI_IMAGE_MODEL="gemini-3.1-flash-image" \
+PORT=8787 \
+node outputs/ai-image-proxy-server.mjs
 ```
 
 打开：
@@ -17,23 +24,22 @@ PORT=8787 node outputs/ai-image-proxy-server.mjs
 http://127.0.0.1:8787/
 ```
 
-OpenAI-compatible 页面配置：
+页面上只需要选择：
 
-- `Base URL`: `https://ai.nomorebug.xyz`
-- `API Key`: 服务商提供的真实密钥
-- `服务商类型`: `OpenAI Compatible`
-- `请求方式`: `后端代理`
-- `代理路径`: `/api`
-- `Model`: `gpt-image-2`
+- `GPT Image`: 使用后端 `OPENAI_IMAGE_*` 配置组。
+- `Gemini / Nano Banana`: 使用后端 `GEMINI_IMAGE_*` 配置组。
 
-Gemini / Nano Banana 页面配置：
+后端配置变量：
 
-- `Base URL`: `https://generativelanguage.googleapis.com/v1`
-- `API Key`: Google AI Studio API Key
-- `服务商类型`: `Gemini / Nano Banana`
-- `请求方式`: `后端代理`
-- `代理路径`: `/api`
-- `Model`: `gemini-3.1-flash-image`
+| 变量 | 说明 |
+| --- | --- |
+| `OPENAI_IMAGE_BASE_URL` | OpenAI-compatible 服务商地址，例如 `https://ai98pro.xyz/v1` |
+| `OPENAI_IMAGE_API_KEY` | OpenAI-compatible 服务商密钥 |
+| `OPENAI_IMAGE_MODEL` | OpenAI-compatible 图片模型，默认 `gpt-image-2` |
+| `GEMINI_IMAGE_BASE_URL` | Gemini 服务地址，例如 `https://generativelanguage.googleapis.com/v1` |
+| `GEMINI_IMAGE_API_KEY` | Gemini / Google AI Studio 密钥 |
+| `GEMINI_IMAGE_MODEL` | Gemini 图片模型，默认 `gemini-3.1-flash-image` |
+| `AI_IMAGE_PROVIDER` | 可选，默认服务商，支持 `openai` 或 `gemini` |
 
 可选模型：
 
@@ -57,37 +63,41 @@ docker run -d \
   image-generator:latest
 ```
 
-如果希望设置默认服务商配置，也可以通过环境变量提供；页面输入值仍会优先使用：
+OpenAI-compatible 配置示例：
 
 ```bash
 docker run -d \
   --name image-generator \
   --restart unless-stopped \
   -p 8787:8787 \
-  -e AI_IMAGE_BASE_URL="https://ai.nomorebug.xyz" \
-  -e AI_IMAGE_API_KEY="your-api-key" \
+  -e OPENAI_IMAGE_BASE_URL="https://ai98pro.xyz/v1" \
+  -e OPENAI_IMAGE_API_KEY="your-openai-compatible-key" \
+  -e OPENAI_IMAGE_MODEL="gpt-image-2" \
   -e AI_IMAGE_PROVIDER="openai" \
   image-generator:latest
 ```
 
-Gemini 默认配置示例：
+Gemini / Nano Banana 配置示例：
 
 ```bash
 docker run -d \
   --name image-generator \
   --restart unless-stopped \
   -p 8787:8787 \
-  -e AI_IMAGE_BASE_URL="https://generativelanguage.googleapis.com/v1" \
-  -e AI_IMAGE_API_KEY="your-google-api-key" \
+  -e GEMINI_IMAGE_BASE_URL="https://generativelanguage.googleapis.com/v1" \
+  -e GEMINI_IMAGE_API_KEY="your-google-api-key" \
+  -e GEMINI_IMAGE_MODEL="gemini-3.1-flash-image" \
   -e AI_IMAGE_PROVIDER="gemini" \
   image-generator:latest
 ```
 
+如果同一个部署同时支持 GPT Image 和 Nano Banana，可以同时传入两组环境变量，页面下拉框会决定本次请求使用哪一组。
+
 ## 生产部署注意
 
 - 建议部署在 HTTPS 后面，例如 Nginx、Caddy、Cloudflare Tunnel 或服务器网关。
-- 不建议把这个页面开放给不受信任的用户，因为页面会把用户输入的 API Key 发给同源代理转发。
-- 如果要多人使用，建议在代理层增加登录鉴权、访问限制和服务商域名白名单。
+- 不建议把这个页面开放给不受信任的用户，因为后端代理会持有真实服务商密钥。
+- 如果要多人使用，建议在代理层增加登录鉴权、访问限制、请求额度控制和服务商域名白名单。
 
 ## 文件说明
 

@@ -7,11 +7,13 @@ import {
   buildGeminiRequest,
   normalizeGeminiResponse
 } from "./provider-adapters.mjs";
+import {
+  publicProviderSummary,
+  resolveProviderConfig
+} from "./provider-config.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
-const DEFAULT_BASE_URL = (process.env.AI_IMAGE_BASE_URL || "https://ai98pro.xyz/v1").replace(/\/+$/, "");
-const DEFAULT_API_KEY = (process.env.AI_IMAGE_API_KEY || "").trim();
 const DEFAULT_PROVIDER = (process.env.AI_IMAGE_PROVIDER || "openai").trim().toLowerCase();
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_MB || 80) * 1024 * 1024;
 
@@ -33,18 +35,18 @@ function sendJson(res, status, body) {
 }
 
 function apiKeyIssue(apiKey) {
-  if (!apiKey) return "Missing API key. Fill API Key on the page or set AI_IMAGE_API_KEY on the proxy server.";
+  if (!apiKey) return "Missing API key for selected provider. Set OPENAI_IMAGE_API_KEY or GEMINI_IMAGE_API_KEY on the proxy server.";
   if (/[^\x20-\x7e]/.test(apiKey)) {
-    return "API key contains non-ASCII characters. It may still be the placeholder text; use the real sk-... key.";
+    return "Backend API key contains non-ASCII characters. Check the selected provider environment variable.";
   }
   if (apiKey.includes("<") || apiKey.includes(">") || /your|placeholder|key/i.test(apiKey)) {
-    return "API key looks like a placeholder. Replace it with the real sk-... key.";
+    return "Backend API key looks like a placeholder. Replace the selected provider environment variable with the real key.";
   }
   return "";
 }
 
 function baseUrlIssue(baseUrl) {
-  if (!baseUrl) return "Missing Base URL. Fill Base URL on the page or set AI_IMAGE_BASE_URL on the proxy server.";
+  if (!baseUrl) return "Missing Base URL for selected provider. Set OPENAI_IMAGE_BASE_URL or GEMINI_IMAGE_BASE_URL on the proxy server.";
   try {
     const url = new URL(baseUrl);
     if (!["http:", "https:"].includes(url.protocol)) {
@@ -56,18 +58,11 @@ function baseUrlIssue(baseUrl) {
   }
 }
 
-function requestConfig(req) {
-  const baseUrlHeader = req.headers["x-ai-image-base-url"];
-  const apiKeyHeader = req.headers["x-ai-image-api-key"];
+function requestProvider(req) {
   const providerHeader = req.headers["x-ai-image-provider"];
-  const baseUrl = String(Array.isArray(baseUrlHeader) ? baseUrlHeader[0] : baseUrlHeader || DEFAULT_BASE_URL)
-    .trim()
-    .replace(/\/+$/, "");
-  const apiKey = String(Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader || DEFAULT_API_KEY).trim();
-  const provider = String(Array.isArray(providerHeader) ? providerHeader[0] : providerHeader || DEFAULT_PROVIDER)
+  return String(Array.isArray(providerHeader) ? providerHeader[0] : providerHeader || DEFAULT_PROVIDER)
     .trim()
     .toLowerCase();
-  return { baseUrl, apiKey, provider };
 }
 
 function providerIssue(provider) {
@@ -94,8 +89,12 @@ function readBody(req) {
 }
 
 async function proxyImages(req, res, pathname) {
-  const { baseUrl, apiKey, provider } = requestConfig(req);
-  const issue = providerIssue(provider) || baseUrlIssue(baseUrl) || apiKeyIssue(apiKey);
+  const provider = requestProvider(req);
+  const config = resolveProviderConfig(provider);
+  const issue = providerIssue(config?.provider || provider)
+    || (!config ? `Unsupported provider: ${provider}. Use openai or gemini.` : "")
+    || baseUrlIssue(config.baseUrl)
+    || apiKeyIssue(config.apiKey);
   if (issue) {
     sendJson(res, 500, { error: { source: "proxy", message: issue } });
     return;
@@ -103,29 +102,57 @@ async function proxyImages(req, res, pathname) {
 
   const body = await readBody(req);
 
-  if (provider === "gemini") {
-    await proxyGeminiImages(res, { baseUrl, apiKey, pathname, body });
+  if (config.provider === "gemini") {
+    await proxyGeminiImages(res, { config, pathname, body });
     return;
   }
 
-  await proxyOpenAICompatibleImages(req, res, { baseUrl, apiKey, pathname, body });
+  await proxyOpenAICompatibleImages(req, res, { config, pathname, body });
 }
 
-async function proxyOpenAICompatibleImages(req, res, { baseUrl, apiKey, pathname, body }) {
+async function proxyOpenAICompatibleImages(req, res, { config, pathname, body }) {
+  const contentType = req.headers["content-type"] || "";
   const headers = {
-    authorization: `Bearer ${apiKey}`,
-    "content-length": String(body.length),
+    authorization: `Bearer ${config.apiKey}`,
     "x-client-request-id": randomUUID()
   };
 
-  if (req.headers["content-type"]) {
-    headers["content-type"] = req.headers["content-type"];
+  let requestBody = body;
+  let upstreamPath = pathname.replace(/^\/api/, "");
+
+  if (contentType.includes("application/json")) {
+    const payload = JSON.parse(body.toString("utf8"));
+    payload.model = config.model;
+
+    if (upstreamPath.endsWith("/edits") && Array.isArray(payload.input_images)) {
+      const form = new FormData();
+      const imageFieldName = payload.image_field_name || "image[]";
+      for (const [key, value] of Object.entries(payload)) {
+        if (key === "input_images" || key === "image_field_name") continue;
+        if (value === undefined || value === null || value === "") continue;
+        form.append(key, String(value));
+      }
+      payload.input_images.forEach((image, index) => {
+        const bytes = Buffer.from(image.data, "base64");
+        const blob = new Blob([bytes], { type: image.mime_type || "image/png" });
+        form.append(imageFieldName, blob, image.name || `image-${index + 1}.png`);
+      });
+      requestBody = form;
+    } else {
+      requestBody = JSON.stringify(payload);
+      headers["content-type"] = "application/json";
+      headers["content-length"] = String(Buffer.byteLength(requestBody));
+    }
+  } else {
+    requestBody = body;
+    headers["content-type"] = contentType;
+    headers["content-length"] = String(body.length);
   }
 
-  const upstream = await fetch(`${baseUrl}${pathname.replace(/^\/api/, "")}`, {
+  const upstream = await fetch(`${config.baseUrl}${upstreamPath}`, {
     method: "POST",
     headers,
-    body
+    body: requestBody
   });
 
   const responseBody = Buffer.from(await upstream.arrayBuffer());
@@ -140,7 +167,7 @@ async function proxyOpenAICompatibleImages(req, res, { baseUrl, apiKey, pathname
   res.end(responseBody);
 }
 
-async function proxyGeminiImages(res, { baseUrl, apiKey, pathname, body }) {
+async function proxyGeminiImages(res, { config, pathname, body }) {
   let payload;
   try {
     payload = JSON.parse(body.toString("utf8"));
@@ -148,8 +175,9 @@ async function proxyGeminiImages(res, { baseUrl, apiKey, pathname, body }) {
     sendJson(res, 400, { error: { source: "proxy", message: "Gemini provider expects a JSON request body." } });
     return;
   }
+  payload.model = config.model;
 
-  const geminiRequest = buildGeminiRequest({ baseUrl, apiKey, pathname, body: payload });
+  const geminiRequest = buildGeminiRequest({ baseUrl: config.baseUrl, apiKey: config.apiKey, pathname, body: payload });
   const requestBody = JSON.stringify(geminiRequest.body);
   const upstream = await fetch(geminiRequest.url, {
     method: "POST",
@@ -214,12 +242,9 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, {
         ok: true,
-        defaultBaseUrl: DEFAULT_BASE_URL,
-        hasDefaultApiKey: Boolean(DEFAULT_API_KEY),
-        defaultApiKeyValid: DEFAULT_API_KEY ? !apiKeyIssue(DEFAULT_API_KEY) : null,
-        defaultApiKeyIssue: DEFAULT_API_KEY ? apiKeyIssue(DEFAULT_API_KEY) || null : null,
         defaultProvider: DEFAULT_PROVIDER,
         providers: ["openai", "gemini"],
+        providerConfigs: publicProviderSummary(),
         pageHeadersSupported: true
       });
       return;
@@ -246,9 +271,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`AI image tool: http://127.0.0.1:${PORT}/`);
-  console.log(`Default proxy upstream: ${DEFAULT_BASE_URL}`);
-  console.log(`Default API key loaded: ${DEFAULT_API_KEY ? "yes" : "no"}`);
   console.log(`Default provider: ${DEFAULT_PROVIDER}`);
-  console.log("Page-supplied Base URL and API Key are supported.");
-  if (DEFAULT_API_KEY && apiKeyIssue(DEFAULT_API_KEY)) console.log(`Default API key issue: ${apiKeyIssue(DEFAULT_API_KEY)}`);
+  console.log("Provider Base URL, API Key and Model are loaded from backend grouped configuration.");
 });
