@@ -4,8 +4,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=8787
+ENV AI_IMAGE_LOG_DIR=/app/logs
 
 COPY outputs ./outputs
+RUN mkdir -p /app/logs && chown -R node:node /app/logs
 
 EXPOSE 8787
 
@@ -15,4 +17,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 USER node
 
 CMD ["node", "outputs/ai-image-proxy-server.mjs"]
-

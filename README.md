@@ -24,6 +24,14 @@ node outputs/ai-image-proxy-server.mjs
 http://127.0.0.1:8787/
 ```
 
+本地日志默认写入：
+
+```text
+logs/YYYY-MM-DD.log
+```
+
+日志只保留当天的 `.log` 文件；新的一天开始写日志时，会自动清理旧日期日志。日志也会同步输出到终端，方便直接看运行过程。
+
 页面上只需要选择：
 
 - `GPT Image`: 使用后端 `OPENAI_IMAGE_*` 配置组。
@@ -40,6 +48,7 @@ http://127.0.0.1:8787/
 | `GEMINI_IMAGE_API_KEY` | Gemini / Google AI Studio 密钥 |
 | `GEMINI_IMAGE_MODEL` | Gemini 图片模型，默认 `gemini-3.1-flash-image` |
 | `AI_IMAGE_PROVIDER` | 可选，默认服务商，支持 `openai` 或 `gemini` |
+| `AI_IMAGE_LOG_DIR` | 可选，日志目录；本地默认 `logs/`，Docker 默认 `/app/logs` |
 
 可选模型：
 
@@ -60,6 +69,7 @@ docker run -d \
   --name image-generator \
   --restart unless-stopped \
   -p 8787:8787 \
+  -v "$(pwd)/logs:/app/logs" \
   image-generator:latest
 ```
 
@@ -70,6 +80,7 @@ docker run -d \
   --name image-generator \
   --restart unless-stopped \
   -p 8787:8787 \
+  -v "$(pwd)/logs:/app/logs" \
   -e OPENAI_IMAGE_BASE_URL="https://ai98pro.xyz/v1" \
   -e OPENAI_IMAGE_API_KEY="your-openai-compatible-key" \
   -e OPENAI_IMAGE_MODEL="gpt-image-2" \
@@ -84,6 +95,7 @@ docker run -d \
   --name image-generator \
   --restart unless-stopped \
   -p 8787:8787 \
+  -v "$(pwd)/logs:/app/logs" \
   -e GEMINI_IMAGE_BASE_URL="https://generativelanguage.googleapis.com/v1" \
   -e GEMINI_IMAGE_API_KEY="your-google-api-key" \
   -e GEMINI_IMAGE_MODEL="gemini-3.1-flash-image" \
@@ -92,6 +104,20 @@ docker run -d \
 ```
 
 如果同一个部署同时支持 GPT Image 和 Nano Banana，可以同时传入两组环境变量，页面下拉框会决定本次请求使用哪一组。
+
+## 日志说明
+
+- 默认日志目录：本地为 `logs/`，Docker 内为 `/app/logs`。
+- 可通过 `AI_IMAGE_LOG_DIR` 覆盖日志目录。
+- 每条图片请求都会带一个 `requestId`，页面错误提示、响应头 `x-request-id` 和日志里的 `requestId` 可以互相对应。
+- 日志会记录服务商、接口路径、后端选择的模型、上游 HTTP 状态、耗时、错误摘要和响应大小。
+- 日志不会记录 API Key，也不会记录参考图或生成图的 base64 内容，只会记录图片数量、文件名、MIME 类型和字节长度摘要。
+
+查看当天日志：
+
+```bash
+tail -f logs/$(date +%F).log
+```
 
 ## 生产部署注意
 

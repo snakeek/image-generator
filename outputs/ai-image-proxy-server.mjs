@@ -11,11 +11,17 @@ import {
   publicProviderSummary,
   resolveProviderConfig
 } from "./provider-config.mjs";
+import {
+  createDailyLogger,
+  summarizePayload
+} from "./request-logger.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const DEFAULT_PROVIDER = (process.env.AI_IMAGE_PROVIDER || "openai").trim().toLowerCase();
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_MB || 80) * 1024 * 1024;
+const LOG_DIR = process.env.AI_IMAGE_LOG_DIR || join(dirname(ROOT), "logs");
+const logger = createDailyLogger({ logDir: LOG_DIR });
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -29,9 +35,25 @@ const MIME = {
   ".webp": "image/webp"
 };
 
-function sendJson(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(body));
+function writeLog(level, event, fields = {}) {
+  logger[level](event, fields).catch(error => {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "logger.write_failed",
+      message: error.message
+    }));
+  });
+}
+
+function sendJson(res, status, body, headers = {}) {
+  const text = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": String(Buffer.byteLength(text)),
+    "connection": "close",
+    ...headers
+  });
+  res.end(text);
 }
 
 function apiKeyIssue(apiKey) {
@@ -88,45 +110,78 @@ function readBody(req) {
   });
 }
 
-async function proxyImages(req, res, pathname) {
+function requestIdFrom(req) {
+  const clientRequestId = req.headers["x-client-request-id"];
+  return String(Array.isArray(clientRequestId) ? clientRequestId[0] : clientRequestId || randomUUID()).trim();
+}
+
+function responsePreview(buffer) {
+  if (!buffer?.length) return "";
+  return buffer.toString("utf8", 0, Math.min(buffer.length, 1200));
+}
+
+async function proxyImages(req, res, pathname, requestId) {
+  const startedAt = Date.now();
   const provider = requestProvider(req);
   const config = resolveProviderConfig(provider);
+  writeLog("info", "proxy.request", {
+    requestId,
+    method: req.method,
+    pathname,
+    provider,
+    resolvedProvider: config?.provider,
+    config: config ? {
+      baseUrl: config.baseUrl,
+      model: config.model,
+      hasApiKey: Boolean(config.apiKey)
+    } : null
+  });
+
+  const body = await readBody(req);
   const issue = providerIssue(config?.provider || provider)
     || (!config ? `Unsupported provider: ${provider}. Use openai or gemini.` : "")
     || baseUrlIssue(config.baseUrl)
     || apiKeyIssue(config.apiKey);
   if (issue) {
-    sendJson(res, 500, { error: { source: "proxy", message: issue } });
+    writeLog("error", "proxy.config_error", {
+      requestId,
+      provider,
+      message: issue,
+      durationMs: Date.now() - startedAt
+    });
+    sendJson(res, 500, { error: { source: "proxy", message: issue }, request_id: requestId }, { "x-request-id": requestId });
     return;
   }
-
-  const body = await readBody(req);
 
   if (config.provider === "gemini") {
-    await proxyGeminiImages(res, { config, pathname, body });
+    await proxyGeminiImages(res, { config, pathname, body, requestId, startedAt });
     return;
   }
 
-  await proxyOpenAICompatibleImages(req, res, { config, pathname, body });
+  await proxyOpenAICompatibleImages(req, res, { config, pathname, body, requestId, startedAt });
 }
 
-async function proxyOpenAICompatibleImages(req, res, { config, pathname, body }) {
+async function proxyOpenAICompatibleImages(req, res, { config, pathname, body, requestId, startedAt }) {
   const contentType = req.headers["content-type"] || "";
   const headers = {
     authorization: `Bearer ${config.apiKey}`,
-    "x-client-request-id": randomUUID()
+    "x-client-request-id": requestId
   };
 
   let requestBody = body;
   let upstreamPath = pathname.replace(/^\/api/, "");
+  let payloadSummary = {};
+  let editMultipart = false;
 
   if (contentType.includes("application/json")) {
     const payload = JSON.parse(body.toString("utf8"));
     payload.model = config.model;
+    payloadSummary = summarizePayload(payload);
 
     if (upstreamPath.endsWith("/edits") && Array.isArray(payload.input_images)) {
       const form = new FormData();
       const imageFieldName = payload.image_field_name || "image[]";
+      editMultipart = true;
       for (const [key, value] of Object.entries(payload)) {
         if (key === "input_images" || key === "image_field_name") continue;
         if (value === undefined || value === null || value === "") continue;
@@ -149,6 +204,16 @@ async function proxyOpenAICompatibleImages(req, res, { config, pathname, body })
     headers["content-length"] = String(body.length);
   }
 
+  writeLog("info", "proxy.upstream_request", {
+    requestId,
+    provider: config.provider,
+    upstreamPath,
+    upstreamBaseUrl: config.baseUrl,
+    contentType: contentType || "application/octet-stream",
+    payload: payloadSummary,
+    editMultipart
+  });
+
   const upstream = await fetch(`${config.baseUrl}${upstreamPath}`, {
     method: "POST",
     headers,
@@ -158,27 +223,49 @@ async function proxyOpenAICompatibleImages(req, res, { config, pathname, body })
   const responseBody = Buffer.from(await upstream.arrayBuffer());
   const responseHeaders = {
     "content-type": upstream.headers.get("content-type") || "application/octet-stream",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
+    "x-request-id": requestId
   };
-  const requestId = upstream.headers.get("x-request-id");
-  if (requestId) responseHeaders["x-upstream-request-id"] = requestId;
+  const upstreamRequestId = upstream.headers.get("x-request-id");
+  if (upstreamRequestId) responseHeaders["x-upstream-request-id"] = upstreamRequestId;
+
+  writeLog(upstream.ok ? "info" : "warn", "proxy.upstream_response", {
+    requestId,
+    provider: config.provider,
+    upstreamPath,
+    upstreamStatus: upstream.status,
+    upstreamRequestId,
+    responseContentType: responseHeaders["content-type"],
+    responseBytes: responseBody.length,
+    durationMs: Date.now() - startedAt,
+    ...(upstream.ok ? {} : { responsePreview: responsePreview(responseBody) })
+  });
 
   res.writeHead(upstream.status, responseHeaders);
   res.end(responseBody);
 }
 
-async function proxyGeminiImages(res, { config, pathname, body }) {
+async function proxyGeminiImages(res, { config, pathname, body, requestId, startedAt }) {
   let payload;
   try {
     payload = JSON.parse(body.toString("utf8"));
   } catch {
-    sendJson(res, 400, { error: { source: "proxy", message: "Gemini provider expects a JSON request body." } });
+    const message = "Gemini provider expects a JSON request body.";
+    writeLog("error", "proxy.invalid_json", { requestId, provider: config.provider, pathname, message });
+    sendJson(res, 400, { error: { source: "proxy", message }, request_id: requestId }, { "x-request-id": requestId });
     return;
   }
   payload.model = config.model;
 
   const geminiRequest = buildGeminiRequest({ baseUrl: config.baseUrl, apiKey: config.apiKey, pathname, body: payload });
   const requestBody = JSON.stringify(geminiRequest.body);
+  writeLog("info", "proxy.upstream_request", {
+    requestId,
+    provider: config.provider,
+    upstreamUrl: geminiRequest.url,
+    payload: summarizePayload(payload)
+  });
+
   const upstream = await fetch(geminiRequest.url, {
     method: "POST",
     headers: {
@@ -199,16 +286,33 @@ async function proxyGeminiImages(res, { config, pathname, body }) {
 
   const responseHeaders = {
     "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
+    "x-request-id": requestId
   };
 
   if (!upstream.ok) {
+    writeLog("warn", "proxy.upstream_response", {
+      requestId,
+      provider: config.provider,
+      upstreamStatus: upstream.status,
+      responseContentType: contentType || "unknown",
+      durationMs: Date.now() - startedAt,
+      responsePreview: typeof json.raw === "string" ? json.raw : JSON.stringify(json).slice(0, 1200)
+    });
     res.writeHead(upstream.status, responseHeaders);
     res.end(JSON.stringify(json));
     return;
   }
 
   const normalized = normalizeGeminiResponse(json);
+  writeLog("info", "proxy.upstream_response", {
+    requestId,
+    provider: config.provider,
+    upstreamStatus: upstream.status,
+    responseContentType: contentType || "unknown",
+    imageCount: normalized.data.length,
+    durationMs: Date.now() - startedAt
+  });
   res.writeHead(200, responseHeaders);
   res.end(JSON.stringify(normalized));
 }
@@ -237,6 +341,7 @@ async function serveStatic(res, pathname) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  const requestId = requestIdFrom(req);
 
   try {
     if (req.method === "GET" && url.pathname === "/api/health") {
@@ -245,6 +350,7 @@ const server = createServer(async (req, res) => {
         defaultProvider: DEFAULT_PROVIDER,
         providers: ["openai", "gemini"],
         providerConfigs: publicProviderSummary(),
+        logDir: LOG_DIR,
         pageHeadersSupported: true
       });
       return;
@@ -254,7 +360,7 @@ const server = createServer(async (req, res) => {
       req.method === "POST"
       && ["/api/images/generations", "/api/images/edits"].includes(url.pathname)
     ) {
-      await proxyImages(req, res, url.pathname);
+      await proxyImages(req, res, url.pathname, requestId);
       return;
     }
 
@@ -263,14 +369,21 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    sendJson(res, 405, { error: { message: "Method not allowed" } });
+    sendJson(res, 405, { error: { message: "Method not allowed" } }, { "x-request-id": requestId });
   } catch (error) {
-    sendJson(res, 500, { error: { source: "proxy", message: error.message || "Proxy error" } });
+    writeLog("error", "proxy.error", {
+      requestId,
+      method: req.method,
+      pathname: url.pathname,
+      error
+    });
+    sendJson(res, 500, { error: { source: "proxy", message: error.message || "Proxy error" }, request_id: requestId }, { "x-request-id": requestId });
   }
 });
 
 server.listen(PORT, () => {
   console.log(`AI image tool: http://127.0.0.1:${PORT}/`);
   console.log(`Default provider: ${DEFAULT_PROVIDER}`);
+  console.log(`Daily log dir: ${LOG_DIR}`);
   console.log("Provider Base URL, API Key and Model are loaded from backend grouped configuration.");
 });
