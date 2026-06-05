@@ -19,7 +19,7 @@ http://127.0.0.1:8787/
 
 页面中填写：
 
-- `Base URL`: `https://ai98pro.xyz/v1`
+- `Base URL`: `https://ai.nomorebug.xyz`
 - `API Key`: 服务商提供的真实 `sk-...`
 - `请求方式`: `后端代理`
 - `代理路径`: `/api`
