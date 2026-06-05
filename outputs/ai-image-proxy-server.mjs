@@ -3,11 +3,16 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import {
+  buildGeminiRequest,
+  normalizeGeminiResponse
+} from "./provider-adapters.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const DEFAULT_BASE_URL = (process.env.AI_IMAGE_BASE_URL || "https://ai98pro.xyz/v1").replace(/\/+$/, "");
 const DEFAULT_API_KEY = (process.env.AI_IMAGE_API_KEY || "").trim();
+const DEFAULT_PROVIDER = (process.env.AI_IMAGE_PROVIDER || "openai").trim().toLowerCase();
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_MB || 80) * 1024 * 1024;
 
 const MIME = {
@@ -54,11 +59,20 @@ function baseUrlIssue(baseUrl) {
 function requestConfig(req) {
   const baseUrlHeader = req.headers["x-ai-image-base-url"];
   const apiKeyHeader = req.headers["x-ai-image-api-key"];
+  const providerHeader = req.headers["x-ai-image-provider"];
   const baseUrl = String(Array.isArray(baseUrlHeader) ? baseUrlHeader[0] : baseUrlHeader || DEFAULT_BASE_URL)
     .trim()
     .replace(/\/+$/, "");
   const apiKey = String(Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader || DEFAULT_API_KEY).trim();
-  return { baseUrl, apiKey };
+  const provider = String(Array.isArray(providerHeader) ? providerHeader[0] : providerHeader || DEFAULT_PROVIDER)
+    .trim()
+    .toLowerCase();
+  return { baseUrl, apiKey, provider };
+}
+
+function providerIssue(provider) {
+  if (["openai", "gemini"].includes(provider)) return "";
+  return `Unsupported provider: ${provider}. Use openai or gemini.`;
 }
 
 function readBody(req) {
@@ -80,14 +94,24 @@ function readBody(req) {
 }
 
 async function proxyImages(req, res, pathname) {
-  const { baseUrl, apiKey } = requestConfig(req);
-  const issue = baseUrlIssue(baseUrl) || apiKeyIssue(apiKey);
+  const { baseUrl, apiKey, provider } = requestConfig(req);
+  const issue = providerIssue(provider) || baseUrlIssue(baseUrl) || apiKeyIssue(apiKey);
   if (issue) {
     sendJson(res, 500, { error: { source: "proxy", message: issue } });
     return;
   }
 
   const body = await readBody(req);
+
+  if (provider === "gemini") {
+    await proxyGeminiImages(res, { baseUrl, apiKey, pathname, body });
+    return;
+  }
+
+  await proxyOpenAICompatibleImages(req, res, { baseUrl, apiKey, pathname, body });
+}
+
+async function proxyOpenAICompatibleImages(req, res, { baseUrl, apiKey, pathname, body }) {
   const headers = {
     authorization: `Bearer ${apiKey}`,
     "content-length": String(body.length),
@@ -114,6 +138,51 @@ async function proxyImages(req, res, pathname) {
 
   res.writeHead(upstream.status, responseHeaders);
   res.end(responseBody);
+}
+
+async function proxyGeminiImages(res, { baseUrl, apiKey, pathname, body }) {
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    sendJson(res, 400, { error: { source: "proxy", message: "Gemini provider expects a JSON request body." } });
+    return;
+  }
+
+  const geminiRequest = buildGeminiRequest({ baseUrl, apiKey, pathname, body: payload });
+  const requestBody = JSON.stringify(geminiRequest.body);
+  const upstream = await fetch(geminiRequest.url, {
+    method: "POST",
+    headers: {
+      ...geminiRequest.headers,
+      "content-length": String(Buffer.byteLength(requestBody))
+    },
+    body: requestBody
+  });
+
+  const contentType = upstream.headers.get("content-type") || "";
+  const raw = await upstream.text();
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    json = { raw };
+  }
+
+  const responseHeaders = {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store"
+  };
+
+  if (!upstream.ok) {
+    res.writeHead(upstream.status, responseHeaders);
+    res.end(JSON.stringify(json));
+    return;
+  }
+
+  const normalized = normalizeGeminiResponse(json);
+  res.writeHead(200, responseHeaders);
+  res.end(JSON.stringify(normalized));
 }
 
 async function serveStatic(res, pathname) {
@@ -149,6 +218,8 @@ const server = createServer(async (req, res) => {
         hasDefaultApiKey: Boolean(DEFAULT_API_KEY),
         defaultApiKeyValid: DEFAULT_API_KEY ? !apiKeyIssue(DEFAULT_API_KEY) : null,
         defaultApiKeyIssue: DEFAULT_API_KEY ? apiKeyIssue(DEFAULT_API_KEY) || null : null,
+        defaultProvider: DEFAULT_PROVIDER,
+        providers: ["openai", "gemini"],
         pageHeadersSupported: true
       });
       return;
@@ -177,6 +248,7 @@ server.listen(PORT, () => {
   console.log(`AI image tool: http://127.0.0.1:${PORT}/`);
   console.log(`Default proxy upstream: ${DEFAULT_BASE_URL}`);
   console.log(`Default API key loaded: ${DEFAULT_API_KEY ? "yes" : "no"}`);
+  console.log(`Default provider: ${DEFAULT_PROVIDER}`);
   console.log("Page-supplied Base URL and API Key are supported.");
   if (DEFAULT_API_KEY && apiKeyIssue(DEFAULT_API_KEY)) console.log(`Default API key issue: ${apiKeyIssue(DEFAULT_API_KEY)}`);
 });

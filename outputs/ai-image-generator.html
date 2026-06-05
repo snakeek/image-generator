@@ -941,6 +941,13 @@
           </div>
           <div class="panel-body">
             <div class="field">
+              <label class="label" for="provider">服务商类型</label>
+              <select class="select" id="provider">
+                <option value="openai" selected>OpenAI Compatible</option>
+                <option value="gemini">Gemini / Nano Banana</option>
+              </select>
+            </div>
+            <div class="field">
               <label class="label" for="baseUrl">Base URL <span>含 /v1</span></label>
               <input class="input mono" id="baseUrl" autocomplete="off" value="https://ai98pro.xyz/v1">
             </div>
@@ -973,13 +980,13 @@
             </div>
             <div class="field">
               <label class="label" for="apiKey">API Key <span>浏览器本地使用</span></label>
-              <input class="input mono" id="apiKey" type="password" autocomplete="off" placeholder="sk-...">
+              <input class="input mono" id="apiKey" type="password" autocomplete="off" placeholder="服务商 API Key">
             </div>
             <label class="inline-check">
               <input id="rememberConfig" type="checkbox">
               记住 Base URL、Model 和常用参数
             </label>
-            <div class="callout">
+            <div class="callout" id="providerHint">
               该服务商未开放浏览器 CORS 时，请使用后端代理模式；浏览器直连只适合服务商明确允许跨域的场景。
             </div>
           </div>
@@ -988,7 +995,7 @@
         <section class="panel">
           <div class="panel-head">
             <h2>输出参数</h2>
-            <small>gpt-image-2</small>
+            <small id="outputModelLabel">gpt-image-2</small>
           </div>
           <div class="panel-body">
             <div class="field-row">
@@ -1008,6 +1015,32 @@
               <div class="field" id="customSizeField">
                 <label class="label" for="customSize">自定义尺寸</label>
                 <input class="input mono" id="customSize" placeholder="1280x720">
+              </div>
+            </div>
+            <div class="field-row hidden" id="geminiOptions">
+              <div class="field">
+                <label class="label" for="geminiAspectRatio">Nano Banana 比例</label>
+                <select class="select" id="geminiAspectRatio">
+                  <option value="">Auto</option>
+                  <option value="1:1">1:1</option>
+                  <option value="16:9" selected>16:9</option>
+                  <option value="9:16">9:16</option>
+                  <option value="4:3">4:3</option>
+                  <option value="3:4">3:4</option>
+                  <option value="4:5">4:5</option>
+                  <option value="5:4">5:4</option>
+                  <option value="21:9">21:9</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="label" for="geminiImageSize">Nano Banana 清晰度</label>
+                <select class="select" id="geminiImageSize">
+                  <option value="">Auto</option>
+                  <option value="512">512</option>
+                  <option value="1K">1K</option>
+                  <option value="2K" selected>2K</option>
+                  <option value="4K">4K</option>
+                </select>
               </div>
             </div>
             <div class="field-row">
@@ -1206,6 +1239,8 @@
     };
 
     const el = {
+      provider: document.querySelector("#provider"),
+      providerHint: document.querySelector("#providerHint"),
       baseUrl: document.querySelector("#baseUrl"),
       requestMode: document.querySelector("#requestMode"),
       proxyPath: document.querySelector("#proxyPath"),
@@ -1216,10 +1251,14 @@
       size: document.querySelector("#size"),
       customSizeField: document.querySelector("#customSizeField"),
       customSize: document.querySelector("#customSize"),
+      geminiOptions: document.querySelector("#geminiOptions"),
+      geminiAspectRatio: document.querySelector("#geminiAspectRatio"),
+      geminiImageSize: document.querySelector("#geminiImageSize"),
       quality: document.querySelector("#quality"),
       outputFormat: document.querySelector("#outputFormat"),
       background: document.querySelector("#background"),
       moderation: document.querySelector("#moderation"),
+      outputModelLabel: document.querySelector("#outputModelLabel"),
       compression: document.querySelector("#compression"),
       compressionNumber: document.querySelector("#compressionNumber"),
       compressionValue: document.querySelector("#compressionValue"),
@@ -1259,12 +1298,42 @@
       clearHistoryBtn: document.querySelector("#clearHistoryBtn")
     };
 
+    const providerDefaults = {
+      openai: {
+        baseUrl: "https://ai98pro.xyz/v1",
+        model: "gpt-image-2",
+        hint: "该服务商未开放浏览器 CORS 时，请使用后端代理模式；浏览器直连只适合服务商明确允许跨域的场景。"
+      },
+      gemini: {
+        baseUrl: "https://generativelanguage.googleapis.com/v1",
+        model: "gemini-3.1-flash-image",
+        hint: "Nano Banana 使用 Gemini generateContent 接口；请填写 Google AI Studio API Key，并使用后端代理模式。"
+      }
+    };
+
     function uid(prefix = "id") {
       return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     }
 
     function cleanBaseUrl(value) {
       return value.trim().replace(/\/+$/, "");
+    }
+
+    function applyProviderDefaults() {
+      const defaults = providerDefaults[el.provider.value];
+      const knownBaseUrls = Object.values(providerDefaults).map(item => item.baseUrl);
+      const knownModels = Object.values(providerDefaults).map(item => item.model);
+
+      if (!el.baseUrl.value.trim() || knownBaseUrls.includes(cleanBaseUrl(el.baseUrl.value))) {
+        el.baseUrl.value = defaults.baseUrl;
+      }
+      if (!el.model.value.trim() || knownModels.includes(el.model.value.trim())) {
+        el.model.value = defaults.model;
+      }
+      if (el.provider.value === "gemini") {
+        el.requestMode.value = "proxy";
+      }
+      updatePreview();
     }
 
     function endpointPath() {
@@ -1302,6 +1371,19 @@
     }
 
     function outputParams() {
+      if (el.provider.value === "gemini") {
+        const params = {
+          model: el.model.value.trim() || providerDefaults.gemini.model,
+          prompt: buildPrompt(),
+          aspect_ratio: el.geminiAspectRatio.value,
+          image_size: el.geminiImageSize.value
+        };
+
+        if (!params.aspect_ratio) delete params.aspect_ratio;
+        if (!params.image_size) delete params.image_size;
+        return params;
+      }
+
       const params = {
         model: el.model.value.trim() || "gpt-image-2",
         prompt: buildPrompt(),
@@ -1330,13 +1412,16 @@
           mode: el.requestMode.value,
           body: {
             ...params,
-            [el.imageFieldName.value]: state.files.map(file => file.name)
+            ...(el.provider.value === "gemini"
+              ? { input_images: state.files.map(file => ({ name: file.name, mime_type: file.file.type })) }
+              : { [el.imageFieldName.value]: state.files.map(file => file.name) })
           }
         };
         if (el.requestMode.value === "direct") {
           preview.headers = { Authorization: "Bearer ***" };
         } else {
           preview.headers = {
+            "X-AI-Image-Provider": el.provider.value,
             "X-AI-Image-Base-URL": cleanBaseUrl(el.baseUrl.value),
             "X-AI-Image-API-Key": "***"
           };
@@ -1355,6 +1440,7 @@
       if (el.requestMode.value === "direct") {
         preview.headers.Authorization = "Bearer ***";
       } else {
+        preview.headers["X-AI-Image-Provider"] = el.provider.value;
         preview.headers["X-AI-Image-Base-URL"] = cleanBaseUrl(el.baseUrl.value);
         preview.headers["X-AI-Image-API-Key"] = "***";
       }
@@ -1380,15 +1466,19 @@
 
     function updatePreview() {
       const useEdit = shouldUseEdit();
+      const isGemini = el.provider.value === "gemini";
       el.endpointPreview.textContent = `${requestRoot()}${endpointPath()}`;
       el.requestHint.textContent = useEdit
-        ? "当前将调用图生图/编辑接口。"
-        : "当前将调用文生图接口。";
+        ? `当前将调用${isGemini ? " Nano Banana" : ""} 图生图/编辑接口。`
+        : `当前将调用${isGemini ? " Nano Banana" : ""} 文生图接口。`;
       el.promptCounter.textContent = `${buildPrompt().length} 字`;
       el.fileCount.textContent = `${state.files.length} / ${MAX_FILES}`;
-      el.customSizeField.classList.toggle("hidden", el.size.value !== "custom");
+      el.customSizeField.classList.toggle("hidden", isGemini || el.size.value !== "custom");
+      el.geminiOptions.classList.toggle("hidden", !isGemini);
       el.compressionValue.textContent = `${el.compression.value}%`;
       el.compressionNumber.value = el.compression.value;
+      el.providerHint.textContent = providerDefaults[el.provider.value].hint;
+      el.outputModelLabel.textContent = el.provider.value === "gemini" ? "Nano Banana" : (el.model.value.trim() || "gpt-image-2");
       el.jsonPreview.textContent = JSON.stringify(requestPreview(), null, 2);
 
       const hasBase = cleanBaseUrl(el.baseUrl.value).length > 0;
@@ -1599,8 +1689,11 @@
       if (el.requestMode.value === "proxy" && !el.proxyPath.value.trim()) {
         throw new Error("请填写代理路径，例如 /api。");
       }
+      if (el.provider.value === "gemini" && el.requestMode.value === "direct") {
+        throw new Error("Nano Banana/Gemini 模式请使用后端代理；浏览器直连通常会被 CORS 拦截。");
+      }
       if (!el.model.value.trim()) {
-        throw new Error("请填写模型名称，例如 gpt-image-2。");
+        throw new Error(`请填写模型名称，例如 ${el.provider.value === "gemini" ? "gemini-3.1-flash-image" : "gpt-image-2"}。`);
       }
       if (!el.apiKey.value.trim()) {
         throw new Error("请填写 API Key。");
@@ -1614,7 +1707,7 @@
       if (shouldUseEdit() && state.files.length === 0) {
         throw new Error("图生图模式需要至少上传 1 张参考图片。");
       }
-      if (!validateCustomSize(selectedSize())) {
+      if (el.provider.value !== "gemini" && !validateCustomSize(selectedSize())) {
         throw new Error("自定义尺寸需满足 gpt-image-2 限制：格式如 2048x1152，两边为 16 的倍数，最长边不超过 3840px，长短边不超过 3:1，总像素在 655360 到 8294400 之间。");
       }
     }
@@ -1671,6 +1764,7 @@
       if (el.requestMode.value === "direct") {
         headers.Authorization = `Bearer ${el.apiKey.value.trim()}`;
       } else {
+        headers["X-AI-Image-Provider"] = el.provider.value;
         headers["X-AI-Image-Base-URL"] = cleanBaseUrl(el.baseUrl.value);
         headers["X-AI-Image-API-Key"] = el.apiKey.value.trim();
       }
@@ -1680,14 +1774,19 @@
       const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       try {
+        const geminiPayload = el.provider.value === "gemini"
+          ? await buildGeminiProxyPayload(params)
+          : null;
         const response = await fetch(url, {
           method: "POST",
-          headers: shouldUseEdit()
-            ? headers
-            : { ...headers, "Content-Type": "application/json" },
-          body: shouldUseEdit()
-            ? buildEditFormData(params)
-            : JSON.stringify(params),
+          headers: geminiPayload || !shouldUseEdit()
+            ? { ...headers, "Content-Type": "application/json" }
+            : headers,
+          body: geminiPayload
+            ? JSON.stringify(geminiPayload)
+            : shouldUseEdit()
+              ? buildEditFormData(params)
+              : JSON.stringify(params),
           signal: controller.signal
         });
 
@@ -1720,6 +1819,31 @@
         return "浏览器请求失败。这个服务商很可能没有开放 CORS，浏览器会在预检阶段拦截请求；请改用后端代理模式，或让服务商返回 Access-Control-Allow-Origin。";
       }
       return error.message;
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const value = String(reader.result || "");
+          resolve(value.includes(",") ? value.split(",")[1] : value);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function buildGeminiProxyPayload(params) {
+      if (!state.files.length) return params;
+      const inputImages = await Promise.all(state.files.map(async file => ({
+        name: file.name,
+        mime_type: file.file.type || "image/png",
+        data: await fileToBase64(file.file)
+      })));
+      return {
+        ...params,
+        input_images: inputImages
+      };
     }
 
     function buildEditFormData(params) {
@@ -1864,6 +1988,7 @@
       }
 
       const config = {
+        provider: el.provider.value,
         baseUrl: el.baseUrl.value,
         requestMode: el.requestMode.value,
         proxyPath: el.proxyPath.value,
@@ -1871,6 +1996,8 @@
         mode: el.mode.value,
         size: el.size.value,
         customSize: el.customSize.value,
+        geminiAspectRatio: el.geminiAspectRatio.value,
+        geminiImageSize: el.geminiImageSize.value,
         quality: el.quality.value,
         outputFormat: el.outputFormat.value,
         background: el.background.value,
@@ -1934,7 +2061,8 @@
 
     function bindEvents() {
       const refreshControls = [
-        el.baseUrl, el.requestMode, el.proxyPath, el.model, el.mode, el.size, el.customSize, el.quality,
+        el.baseUrl, el.requestMode, el.proxyPath, el.model, el.mode, el.size, el.customSize,
+        el.geminiAspectRatio, el.geminiImageSize, el.quality,
         el.outputFormat, el.background, el.moderation, el.count,
         el.imageFieldName, el.prompt, el.negativePrompt
       ];
@@ -1955,6 +2083,7 @@
 
       el.generateBtn.addEventListener("click", generate);
       el.clearInputsBtn.addEventListener("click", clearInputs);
+      el.provider.addEventListener("change", applyProviderDefaults);
 
       document.querySelectorAll("[data-input-mode]").forEach(button => {
         button.addEventListener("click", () => {

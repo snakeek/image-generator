@@ -1,8 +1,8 @@
 # AI 图片生成器
 
-一个可部署的 AI 图片生成工具页，支持 `gpt-image-2` 文生图和图生图。
+一个可部署的 AI 图片生成工具页，支持 `gpt-image-2`、Gemini / Nano Banana 文生图和图生图。
 
-页面通过同源代理调用 OpenAI-compatible 图片接口，避免浏览器直连三方服务商时遇到 CORS 限制。`Base URL` 和 `API Key` 默认由页面输入，代理只负责转发。
+页面通过同源代理调用图片接口，避免浏览器直连三方服务商时遇到 CORS 限制。`Base URL`、`API Key` 和服务商类型默认由页面输入，代理只负责转发和协议适配。
 
 ## 本地运行
 
@@ -17,13 +17,29 @@ PORT=8787 node outputs/ai-image-proxy-server.mjs
 http://127.0.0.1:8787/
 ```
 
-页面中填写：
+OpenAI-compatible 页面配置：
 
 - `Base URL`: `https://ai.nomorebug.xyz`
-- `API Key`: 服务商提供的真实 `sk-...`
+- `API Key`: 服务商提供的真实密钥
+- `服务商类型`: `OpenAI Compatible`
 - `请求方式`: `后端代理`
 - `代理路径`: `/api`
 - `Model`: `gpt-image-2`
+
+Gemini / Nano Banana 页面配置：
+
+- `Base URL`: `https://generativelanguage.googleapis.com/v1`
+- `API Key`: Google AI Studio API Key
+- `服务商类型`: `Gemini / Nano Banana`
+- `请求方式`: `后端代理`
+- `代理路径`: `/api`
+- `Model`: `gemini-3.1-flash-image`
+
+可选模型：
+
+- `gemini-2.5-flash-image`: Nano Banana
+- `gemini-3.1-flash-image`: Nano Banana 2
+- `gemini-3-pro-image`: Nano Banana Pro
 
 ## Docker 构建
 
@@ -48,8 +64,22 @@ docker run -d \
   --name image-generator \
   --restart unless-stopped \
   -p 8787:8787 \
-  -e AI_IMAGE_BASE_URL="https://ai98pro.xyz/v1" \
-  -e AI_IMAGE_API_KEY="sk-xxxx" \
+  -e AI_IMAGE_BASE_URL="https://ai.nomorebug.xyz" \
+  -e AI_IMAGE_API_KEY="your-api-key" \
+  -e AI_IMAGE_PROVIDER="openai" \
+  image-generator:latest
+```
+
+Gemini 默认配置示例：
+
+```bash
+docker run -d \
+  --name image-generator \
+  --restart unless-stopped \
+  -p 8787:8787 \
+  -e AI_IMAGE_BASE_URL="https://generativelanguage.googleapis.com/v1" \
+  -e AI_IMAGE_API_KEY="your-google-api-key" \
+  -e AI_IMAGE_PROVIDER="gemini" \
   image-generator:latest
 ```
 
@@ -63,5 +93,6 @@ docker run -d \
 
 - `outputs/ai-image-generator.html`: 前端工具页面。
 - `outputs/ai-image-proxy-server.mjs`: 静态文件服务和图片接口代理。
+- `outputs/provider-adapters.mjs`: OpenAI-compatible 与 Gemini / Nano Banana 协议适配。
 - `Dockerfile`: 镜像构建文件。
 - `.dockerignore`: Docker 构建忽略规则。
