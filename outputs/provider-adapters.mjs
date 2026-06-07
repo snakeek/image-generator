@@ -3,7 +3,7 @@ export function cleanBaseUrl(value = "") {
 }
 
 export function buildGeminiRequest({ baseUrl, apiKey, body }) {
-  const model = body.model || "gemini-3.1-flash-image";
+  const model = body.model || "gemini-2.5-flash-image-preview";
   const parts = [];
 
   if (body.prompt) {

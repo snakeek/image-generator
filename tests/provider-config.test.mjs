@@ -36,6 +36,34 @@ test("resolveProviderConfig reads Gemini group from backend env", () => {
   });
 });
 
+test("resolveProviderConfig uses Nano Banana provider defaults", () => {
+  const config = resolveProviderConfig("gemini", {});
+
+  assert.equal(config.baseUrl, "https://vip.undyingapi.com");
+  assert.equal(config.model, "gemini-2.5-flash-image-preview");
+});
+
+test("resolveProviderConfig lets a page API key override backend env", () => {
+  const config = resolveProviderConfig(
+    "openai",
+    {
+      OPENAI_IMAGE_BASE_URL: "https://openai.example/v1",
+      OPENAI_IMAGE_API_KEY: "backend-secret",
+      OPENAI_IMAGE_MODEL: "gpt-image-2-custom"
+    },
+    {
+      apiKey: "page-secret"
+    }
+  );
+
+  assert.deepEqual(config, {
+    provider: "openai",
+    baseUrl: "https://openai.example/v1",
+    apiKey: "page-secret",
+    model: "gpt-image-2-custom"
+  });
+});
+
 test("publicProviderSummary exposes only non-secret provider status", () => {
   const summary = publicProviderSummary({
     OPENAI_IMAGE_BASE_URL: "https://openai.example/v1",

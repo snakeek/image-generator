@@ -4,8 +4,8 @@ const PROVIDER_DEFAULTS = {
     model: "gpt-image-2"
   },
   gemini: {
-    baseUrl: "https://generativelanguage.googleapis.com/v1",
-    model: "gemini-3.1-flash-image"
+    baseUrl: "https://vip.undyingapi.com",
+    model: "gemini-2.5-flash-image-preview"
   }
 };
 
@@ -27,7 +27,12 @@ export function normalizeProvider(provider = "openai") {
   return value;
 }
 
-export function resolveProviderConfig(provider = "openai", env = process.env) {
+function overrideValue(value, fallback) {
+  const normalized = String(value || "").trim();
+  return normalized || fallback;
+}
+
+export function resolveProviderConfig(provider = "openai", env = process.env, overrides = {}) {
   const normalized = normalizeProvider(provider);
   if (!PROVIDER_DEFAULTS[normalized]) {
     return null;
@@ -37,7 +42,7 @@ export function resolveProviderConfig(provider = "openai", env = process.env) {
     return {
       provider: "gemini",
       baseUrl: cleanBaseUrl(valueFrom(env, ["GEMINI_IMAGE_BASE_URL"], PROVIDER_DEFAULTS.gemini.baseUrl)),
-      apiKey: valueFrom(env, ["GEMINI_IMAGE_API_KEY"], ""),
+      apiKey: overrideValue(overrides.apiKey, valueFrom(env, ["GEMINI_IMAGE_API_KEY"], "")),
       model: valueFrom(env, ["GEMINI_IMAGE_MODEL"], PROVIDER_DEFAULTS.gemini.model)
     };
   }
@@ -45,7 +50,7 @@ export function resolveProviderConfig(provider = "openai", env = process.env) {
   return {
     provider: "openai",
     baseUrl: cleanBaseUrl(valueFrom(env, ["OPENAI_IMAGE_BASE_URL", "AI_IMAGE_BASE_URL"], PROVIDER_DEFAULTS.openai.baseUrl)),
-    apiKey: valueFrom(env, ["OPENAI_IMAGE_API_KEY", "AI_IMAGE_API_KEY"], ""),
+    apiKey: overrideValue(overrides.apiKey, valueFrom(env, ["OPENAI_IMAGE_API_KEY", "AI_IMAGE_API_KEY"], "")),
     model: valueFrom(env, ["OPENAI_IMAGE_MODEL", "AI_IMAGE_MODEL"], PROVIDER_DEFAULTS.openai.model)
   };
 }

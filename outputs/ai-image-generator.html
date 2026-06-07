@@ -957,12 +957,16 @@
                 </select>
               </div>
             </div>
+            <div class="field">
+              <label class="label" for="apiKey">API Key <span>仅本次请求使用</span></label>
+              <input class="input mono" id="apiKey" type="password" autocomplete="off" placeholder="填写当前服务商 API Key">
+            </div>
             <label class="inline-check">
               <input id="rememberConfig" type="checkbox">
-              记住常用参数
+              记住常用参数（不含 API Key）
             </label>
             <div class="callout" id="providerHint">
-              Base URL、API Key 和模型由后端按服务商类型分组配置；页面只负责选择服务商和创作参数。
+              Base URL 和模型由后端按服务商类型分组配置；API Key 从页面输入并仅随本次请求发送。
             </div>
           </div>
         </section>
@@ -1217,6 +1221,7 @@
       provider: document.querySelector("#provider"),
       providerHint: document.querySelector("#providerHint"),
       mode: document.querySelector("#mode"),
+      apiKey: document.querySelector("#apiKey"),
       rememberConfig: document.querySelector("#rememberConfig"),
       size: document.querySelector("#size"),
       customSizeField: document.querySelector("#customSizeField"),
@@ -1272,12 +1277,12 @@
       openai: {
         label: "GPT Image",
         outputLabel: "后端 GPT 配置",
-        hint: "GPT Image 的 Base URL、API Key 和模型由后端 OpenAI 分组配置；页面只选择服务商和创作参数。"
+        hint: "GPT Image 的 Base URL 和模型由后端 OpenAI 分组配置；API Key 从页面输入。"
       },
       gemini: {
         label: "Nano Banana",
         outputLabel: "后端 Gemini 配置",
-        hint: "Nano Banana 使用后端 Gemini 分组配置，并由代理转换为 generateContent 请求。"
+        hint: "Nano Banana 使用后端 Gemini 分组配置，并由代理转换为 generateContent 请求；API Key 从页面输入。"
       }
     };
 
@@ -1362,7 +1367,8 @@
         mode: "backend-proxy",
         headers: {
           "Content-Type": "application/json",
-          "X-AI-Image-Provider": el.provider.value
+          "X-AI-Image-Provider": el.provider.value,
+          "X-AI-Image-API-Key": el.apiKey.value.trim() ? "***" : ""
         },
         body: params
       };
@@ -1420,8 +1426,11 @@
       el.jsonPreview.textContent = JSON.stringify(requestPreview(), null, 2);
 
       const hasPrompt = el.prompt.value.trim().length > 0;
-      if (hasPrompt) {
+      const hasApiKey = el.apiKey.value.trim().length > 0;
+      if (hasPrompt && hasApiKey) {
         setStatus("ready", "可生成");
+      } else if (!hasApiKey) {
+        setStatus("", "等待 API Key");
       } else {
         setStatus("", "等待提示词");
       }
@@ -1625,6 +1634,12 @@
       if (!el.prompt.value.trim()) {
         throw new Error("请填写提示词。");
       }
+      if (!el.apiKey.value.trim()) {
+        throw new Error("请填写当前服务商 API Key。");
+      }
+      if (/[^\x20-\x7e]/.test(el.apiKey.value.trim())) {
+        throw new Error("API Key 只能包含 ASCII 字符。请确认没有复制到中文占位符、空格或其他不可见字符。");
+      }
       if (shouldUseEdit() && state.files.length === 0) {
         throw new Error("图生图模式需要至少上传 1 张参考图片。");
       }
@@ -1684,7 +1699,8 @@
       const headers = {
         "Content-Type": "application/json",
         "X-Client-Request-Id": uid("client"),
-        "X-AI-Image-Provider": el.provider.value
+        "X-AI-Image-Provider": el.provider.value,
+        "X-AI-Image-API-Key": el.apiKey.value.trim()
       };
 
       const controller = new AbortController();
@@ -1954,7 +1970,7 @@
 
     function bindEvents() {
       const refreshControls = [
-        el.mode, el.size, el.customSize,
+        el.mode, el.apiKey, el.size, el.customSize,
         el.geminiAspectRatio, el.geminiImageSize, el.quality,
         el.outputFormat, el.background, el.moderation, el.count,
         el.imageFieldName, el.prompt, el.negativePrompt

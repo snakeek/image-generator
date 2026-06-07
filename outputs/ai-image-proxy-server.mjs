@@ -57,12 +57,12 @@ function sendJson(res, status, body, headers = {}) {
 }
 
 function apiKeyIssue(apiKey) {
-  if (!apiKey) return "Missing API key for selected provider. Set OPENAI_IMAGE_API_KEY or GEMINI_IMAGE_API_KEY on the proxy server.";
+  if (!apiKey) return "Missing API key for selected provider. Fill API Key on the page or set OPENAI_IMAGE_API_KEY/GEMINI_IMAGE_API_KEY on the proxy server.";
   if (/[^\x20-\x7e]/.test(apiKey)) {
-    return "Backend API key contains non-ASCII characters. Check the selected provider environment variable.";
+    return "API key contains non-ASCII characters. Check the page API Key input or selected provider environment variable.";
   }
   if (apiKey.includes("<") || apiKey.includes(">") || /your|placeholder|key/i.test(apiKey)) {
-    return "Backend API key looks like a placeholder. Replace the selected provider environment variable with the real key.";
+    return "API key looks like a placeholder. Replace it with the real key.";
   }
   return "";
 }
@@ -85,6 +85,11 @@ function requestProvider(req) {
   return String(Array.isArray(providerHeader) ? providerHeader[0] : providerHeader || DEFAULT_PROVIDER)
     .trim()
     .toLowerCase();
+}
+
+function requestApiKey(req) {
+  const apiKeyHeader = req.headers["x-ai-image-api-key"];
+  return String(Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader || "").trim();
 }
 
 function providerIssue(provider) {
@@ -123,13 +128,15 @@ function responsePreview(buffer) {
 async function proxyImages(req, res, pathname, requestId) {
   const startedAt = Date.now();
   const provider = requestProvider(req);
-  const config = resolveProviderConfig(provider);
+  const pageApiKey = requestApiKey(req);
+  const config = resolveProviderConfig(provider, process.env, { apiKey: pageApiKey });
   writeLog("info", "proxy.request", {
     requestId,
     method: req.method,
     pathname,
     provider,
     resolvedProvider: config?.provider,
+    apiKeySource: pageApiKey ? "page" : "env",
     config: config ? {
       baseUrl: config.baseUrl,
       model: config.model,
@@ -351,6 +358,7 @@ const server = createServer(async (req, res) => {
         providers: ["openai", "gemini"],
         providerConfigs: publicProviderSummary(),
         logDir: LOG_DIR,
+        pageApiKeySupported: true,
         pageHeadersSupported: true
       });
       return;
@@ -385,5 +393,5 @@ server.listen(PORT, () => {
   console.log(`AI image tool: http://127.0.0.1:${PORT}/`);
   console.log(`Default provider: ${DEFAULT_PROVIDER}`);
   console.log(`Daily log dir: ${LOG_DIR}`);
-  console.log("Provider Base URL, API Key and Model are loaded from backend grouped configuration.");
+  console.log("Provider Base URL and Model are loaded from backend grouped configuration. API Key can be supplied by the page.");
 });
