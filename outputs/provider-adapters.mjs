@@ -2,6 +2,19 @@ export function cleanBaseUrl(value = "") {
   return String(value).trim().replace(/\/+$/, "");
 }
 
+function geminiApiRoot(baseUrl) {
+  const cleaned = cleanBaseUrl(baseUrl);
+  try {
+    const url = new URL(cleaned);
+    if (url.pathname === "" || url.pathname === "/") {
+      return `${url.origin}/v1`;
+    }
+  } catch {
+    return cleaned;
+  }
+  return cleaned;
+}
+
 export function buildGeminiRequest({ baseUrl, apiKey, body }) {
   const model = body.model || "gemini-2.5-flash-image-preview";
   const parts = [];
@@ -33,7 +46,7 @@ export function buildGeminiRequest({ baseUrl, apiKey, body }) {
   }
 
   return {
-    url: `${cleanBaseUrl(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`,
+    url: `${geminiApiRoot(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`,
     headers: {
       "x-goog-api-key": apiKey,
       "content-type": "application/json"

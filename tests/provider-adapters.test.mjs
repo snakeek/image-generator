@@ -75,6 +75,23 @@ test("buildGeminiRequest maps uploaded reference images to inline_data parts", (
   ]);
 });
 
+test("buildGeminiRequest adds v1 when Gemini base URL is a service root", () => {
+  const request = buildGeminiRequest({
+    baseUrl: "https://vip.undyingapi.com",
+    apiKey: "test-key",
+    pathname: "/api/images/generations",
+    body: {
+      model: "gemini-2.5-flash-image-preview",
+      prompt: "画一张图"
+    }
+  });
+
+  assert.equal(
+    request.url,
+    "https://vip.undyingapi.com/v1/models/gemini-2.5-flash-image-preview:generateContent"
+  );
+});
+
 test("normalizeGeminiResponse returns the first inline image as OpenAI-compatible data", () => {
   const normalized = normalizeGeminiResponse({
     candidates: [
