@@ -65,8 +65,16 @@ export function buildGeminiRequest({ baseUrl, apiKey, body }) {
 export function normalizeGeminiResponse(json) {
   const textParts = [];
   const images = [];
+  const finishReasons = [];
+  const seenFinishReasons = new Set();
+  const promptFeedback = json?.promptFeedback || json?.prompt_feedback;
 
   for (const candidate of json?.candidates || []) {
+    if (candidate?.finishReason && !seenFinishReasons.has(candidate.finishReason)) {
+      seenFinishReasons.add(candidate.finishReason);
+      finishReasons.push(candidate.finishReason);
+    }
+
     for (const part of candidate?.content?.parts || []) {
       if (part.text) {
         textParts.push(part.text);
@@ -83,10 +91,24 @@ export function normalizeGeminiResponse(json) {
   }
 
   const revisedPrompt = textParts.join("\n").trim();
-  return {
+  const result = {
     data: images.map(image => ({
       ...image,
       ...(revisedPrompt ? { revised_prompt: revisedPrompt } : {})
     }))
   };
+
+  if (revisedPrompt && images.length === 0) {
+    result.text = revisedPrompt;
+  }
+
+  if (finishReasons.length > 0) {
+    result.finishReasons = finishReasons;
+  }
+
+  if (promptFeedback) {
+    result.promptFeedback = promptFeedback;
+  }
+
+  return result;
 }

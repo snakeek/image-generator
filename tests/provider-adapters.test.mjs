@@ -121,3 +121,30 @@ test("normalizeGeminiResponse returns the first inline image as OpenAI-compatibl
     ]
   });
 });
+
+test("normalizeGeminiResponse keeps Gemini no-image diagnostics", () => {
+  const normalized = normalizeGeminiResponse({
+    promptFeedback: {
+      blockReason: "SAFETY"
+    },
+    candidates: [
+      {
+        finishReason: "SAFETY",
+        content: {
+          parts: [
+            { text: "无法生成该图片，请调整提示词后重试。" }
+          ]
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(normalized, {
+    data: [],
+    text: "无法生成该图片，请调整提示词后重试。",
+    finishReasons: ["SAFETY"],
+    promptFeedback: {
+      blockReason: "SAFETY"
+    }
+  });
+});

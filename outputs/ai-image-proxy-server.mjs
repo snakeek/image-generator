@@ -125,6 +125,44 @@ function responsePreview(buffer) {
   return buffer.toString("utf8", 0, Math.min(buffer.length, 1200));
 }
 
+function previewJson(value) {
+  try {
+    return JSON.stringify(value).slice(0, 1200);
+  } catch {
+    return "";
+  }
+}
+
+function geminiEmptyImageError(normalized, json) {
+  const details = {
+    ...(normalized.text ? { text: normalized.text } : {}),
+    ...(normalized.finishReasons?.length ? { finishReasons: normalized.finishReasons } : {}),
+    ...(normalized.promptFeedback ? { promptFeedback: normalized.promptFeedback } : {}),
+    responsePreview: typeof json.raw === "string" ? json.raw.slice(0, 1200) : previewJson(json)
+  };
+  const messageParts = [
+    "服务商返回成功，但没有返回图片。可能是提示词被安全策略拦截、模型只返回了文本，或服务商未按 Gemini 图片格式返回。"
+  ];
+
+  if (details.text) {
+    messageParts.push(`服务商说明：${details.text}`);
+  }
+
+  if (details.finishReasons?.length) {
+    messageParts.push(`finishReason：${details.finishReasons.join(", ")}`);
+  }
+
+  const blockReason = details.promptFeedback?.blockReason || details.promptFeedback?.block_reason;
+  if (blockReason) {
+    messageParts.push(`promptFeedback.blockReason：${blockReason}`);
+  }
+
+  return {
+    message: messageParts.join("\n"),
+    details
+  };
+}
+
 async function proxyImages(req, res, pathname, requestId) {
   const startedAt = Date.now();
   const provider = requestProvider(req);
@@ -312,6 +350,29 @@ async function proxyGeminiImages(res, { config, pathname, body, requestId, start
   }
 
   const normalized = normalizeGeminiResponse(json);
+  if (normalized.data.length === 0) {
+    const emptyImageError = geminiEmptyImageError(normalized, json);
+    writeLog("warn", "proxy.empty_image_response", {
+      requestId,
+      provider: config.provider,
+      upstreamStatus: upstream.status,
+      responseContentType: contentType || "unknown",
+      imageCount: 0,
+      durationMs: Date.now() - startedAt,
+      ...emptyImageError.details
+    });
+    sendJson(res, 502, {
+      error: {
+        source: "proxy",
+        message: emptyImageError.message,
+        upstream_status: upstream.status,
+        details: emptyImageError.details
+      },
+      request_id: requestId
+    }, responseHeaders);
+    return;
+  }
+
   writeLog("info", "proxy.upstream_response", {
     requestId,
     provider: config.provider,
