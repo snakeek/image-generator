@@ -26,11 +26,14 @@ export function redactLogValue(key, value) {
 
 export function sanitizeLogFields(value, key = "") {
   if (value instanceof Error) {
-    return {
+    return Object.fromEntries(Object.entries({
       name: value.name,
       message: value.message,
-      stack: value.stack ? redactLogValue("stack", value.stack) : undefined
-    };
+      code: value.code,
+      statusCode: value.statusCode,
+      stack: value.stack ? redactLogValue("stack", value.stack) : undefined,
+      cause: value.cause ? sanitizeLogFields(value.cause, "cause") : undefined
+    }).filter(([, entryValue]) => entryValue !== undefined));
   }
 
   if (Array.isArray(value)) {

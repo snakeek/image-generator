@@ -15,11 +15,15 @@ import {
   createDailyLogger,
   summarizePayload
 } from "./request-logger.mjs";
+import {
+  postBuffered
+} from "./upstream-http-client.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const DEFAULT_PROVIDER = (process.env.AI_IMAGE_PROVIDER || "openai").trim().toLowerCase();
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_MB || 80) * 1024 * 1024;
+const UPSTREAM_TIMEOUT_MS = Number(process.env.AI_IMAGE_UPSTREAM_TIMEOUT_MS || 600000);
 const LOG_DIR = process.env.AI_IMAGE_LOG_DIR || join(dirname(ROOT), "logs");
 const logger = createDailyLogger({ logDir: LOG_DIR });
 
@@ -256,14 +260,22 @@ async function proxyOpenAICompatibleImages(req, res, { config, pathname, body, r
     upstreamBaseUrl: config.baseUrl,
     contentType: contentType || "application/octet-stream",
     payload: payloadSummary,
-    editMultipart
+    editMultipart,
+    timeoutMs: editMultipart ? null : UPSTREAM_TIMEOUT_MS
   });
 
-  const upstream = await fetch(`${config.baseUrl}${upstreamPath}`, {
-    method: "POST",
-    headers,
-    body: requestBody
-  });
+  const upstreamUrl = `${config.baseUrl}${upstreamPath}`;
+  const upstream = editMultipart
+    ? await fetch(upstreamUrl, {
+      method: "POST",
+      headers,
+      body: requestBody
+    })
+    : await postBuffered(upstreamUrl, {
+      headers,
+      body: requestBody,
+      timeoutMs: UPSTREAM_TIMEOUT_MS
+    });
 
   const responseBody = Buffer.from(await upstream.arrayBuffer());
   const responseHeaders = {
@@ -308,16 +320,17 @@ async function proxyGeminiImages(res, { config, pathname, body, requestId, start
     requestId,
     provider: config.provider,
     upstreamUrl: geminiRequest.url,
-    payload: summarizePayload(payload)
+    payload: summarizePayload(payload),
+    timeoutMs: UPSTREAM_TIMEOUT_MS
   });
 
-  const upstream = await fetch(geminiRequest.url, {
-    method: "POST",
+  const upstream = await postBuffered(geminiRequest.url, {
     headers: {
       ...geminiRequest.headers,
       "content-length": String(Buffer.byteLength(requestBody))
     },
-    body: requestBody
+    body: requestBody,
+    timeoutMs: UPSTREAM_TIMEOUT_MS
   });
 
   const contentType = upstream.headers.get("content-type") || "";
@@ -440,13 +453,21 @@ const server = createServer(async (req, res) => {
 
     sendJson(res, 405, { error: { message: "Method not allowed" } }, { "x-request-id": requestId });
   } catch (error) {
+    const statusCode = Number(error.statusCode || 500);
     writeLog("error", "proxy.error", {
       requestId,
       method: req.method,
       pathname: url.pathname,
       error
     });
-    sendJson(res, 500, { error: { source: "proxy", message: error.message || "Proxy error" }, request_id: requestId }, { "x-request-id": requestId });
+    sendJson(res, statusCode, {
+      error: {
+        source: "proxy",
+        message: error.message || "Proxy error",
+        ...(error.code ? { code: error.code } : {})
+      },
+      request_id: requestId
+    }, { "x-request-id": requestId });
   }
 });
 

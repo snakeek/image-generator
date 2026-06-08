@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   createDailyLogger,
   redactLogValue,
+  sanitizeLogFields,
   summarizePayload
 } from "../outputs/request-logger.mjs";
 
@@ -69,3 +70,25 @@ test("summarizePayload keeps useful request shape without image bytes", () => {
   });
 }
 );
+
+test("sanitizeLogFields keeps nested error cause details", () => {
+  const cause = new Error("Headers Timeout Error");
+  cause.code = "UND_ERR_HEADERS_TIMEOUT";
+  const error = new Error("fetch failed", { cause });
+  error.code = "FETCH_FAILED";
+
+  assert.deepEqual(sanitizeLogFields({ error }), {
+    error: {
+      name: "Error",
+      message: "fetch failed",
+      code: "FETCH_FAILED",
+      stack: error.stack,
+      cause: {
+        name: "Error",
+        message: "Headers Timeout Error",
+        code: "UND_ERR_HEADERS_TIMEOUT",
+        stack: cause.stack
+      }
+    }
+  });
+});

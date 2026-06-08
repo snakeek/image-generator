@@ -47,6 +47,7 @@ logs/YYYY-MM-DD.log
 | `GEMINI_IMAGE_MODEL` | Nano Banana 图片模型，默认 `gemini-2.5-flash-image-preview` |
 | `AI_IMAGE_PROVIDER` | 可选，默认服务商，支持 `openai` 或 `gemini` |
 | `AI_IMAGE_LOG_DIR` | 可选，日志目录；本地默认 `logs/`，Docker 默认 `/app/logs` |
+| `AI_IMAGE_UPSTREAM_TIMEOUT_MS` | 可选，图片上游请求超时；默认 `600000`，即 10 分钟 |
 
 可选模型：
 
@@ -108,6 +109,7 @@ docker run -d \
 - 可通过 `AI_IMAGE_LOG_DIR` 覆盖日志目录。
 - 每条图片请求都会带一个 `requestId`，页面错误提示、响应头 `x-request-id` 和日志里的 `requestId` 可以互相对应。
 - 日志会记录服务商、接口路径、后端选择的模型、上游 HTTP 状态、耗时、错误摘要和响应大小。
+- GPT Image / Nano Banana 的 JSON 请求默认最多等待 10 分钟；如果服务商长时间不返回响应，会返回 `504` 并在日志里记录 `UPSTREAM_TIMEOUT`。
 - 日志不会记录 API Key，也不会记录参考图或生成图的 base64 内容，只会记录图片数量、文件名、MIME 类型和字节长度摘要。
 
 查看当天日志：
