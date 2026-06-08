@@ -940,22 +940,12 @@
             <small id="endpointPreview">/api/images/generations</small>
           </div>
           <div class="panel-body">
-            <div class="field-row">
-              <div class="field">
-                <label class="label" for="provider">服务商类型</label>
-                <select class="select" id="provider">
-                  <option value="openai" selected>GPT Image</option>
-                  <option value="gemini">Gemini / Nano Banana</option>
-                </select>
-              </div>
-              <div class="field">
-                <label class="label" for="mode">调用模式</label>
-                <select class="select" id="mode">
-                  <option value="auto">自动</option>
-                  <option value="generate">文生图</option>
-                  <option value="edit">图生图</option>
-                </select>
-              </div>
+            <div class="field">
+              <label class="label" for="provider">服务商类型</label>
+              <select class="select" id="provider">
+                <option value="openai" selected>GPT Image</option>
+                <option value="gemini">Gemini / Nano Banana</option>
+              </select>
             </div>
             <div class="field">
               <label class="label" for="apiKey">API Key <span>仅本次请求使用</span></label>
@@ -1220,7 +1210,6 @@
     const el = {
       provider: document.querySelector("#provider"),
       providerHint: document.querySelector("#providerHint"),
-      mode: document.querySelector("#mode"),
       apiKey: document.querySelector("#apiKey"),
       rememberConfig: document.querySelector("#rememberConfig"),
       size: document.querySelector("#size"),
@@ -1308,9 +1297,7 @@
     }
 
     function shouldUseEdit() {
-      if (el.mode.value === "edit") return true;
-      if (el.mode.value === "generate") return false;
-      return state.files.length > 0 || state.inputMode === "image";
+      return state.inputMode === "image";
     }
 
     function selectedSize() {
@@ -1405,10 +1392,6 @@
     }
 
     function updatePreview() {
-      if (state.inputMode === "image" && el.mode.value === "generate") {
-        el.mode.value = "auto";
-      }
-
       const useEdit = shouldUseEdit();
       const isGemini = el.provider.value === "gemini";
       el.endpointPreview.textContent = `${requestRoot()}${endpointPath()}`;
@@ -1902,7 +1885,6 @@
 
       const config = {
         provider: el.provider.value,
-        mode: el.mode.value,
         size: el.size.value,
         customSize: el.customSize.value,
         geminiAspectRatio: el.geminiAspectRatio.value,
@@ -1970,7 +1952,7 @@
 
     function bindEvents() {
       const refreshControls = [
-        el.mode, el.apiKey, el.size, el.customSize,
+        el.apiKey, el.size, el.customSize,
         el.geminiAspectRatio, el.geminiImageSize, el.quality,
         el.outputFormat, el.background, el.moderation, el.count,
         el.imageFieldName, el.prompt, el.negativePrompt
@@ -1998,7 +1980,6 @@
         button.addEventListener("click", () => {
           state.inputMode = button.dataset.inputMode;
           document.querySelectorAll("[data-input-mode]").forEach(item => item.classList.toggle("active", item === button));
-          if (state.inputMode === "image" && el.mode.value === "generate") el.mode.value = "auto";
           updatePreview();
         });
       });
