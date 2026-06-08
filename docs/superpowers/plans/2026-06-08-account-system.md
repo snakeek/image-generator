@@ -48,6 +48,7 @@ ${AI_IMAGE_DATA_DIR || /app/data}/image-generator.sqlite
 | `AI_IMAGE_DATA_DIR` | Docker 为 `/app/data`，本地为项目 `data/` | SQLite 数据目录 |
 | `AUTH_SESSION_SECRET` | 必填 | 会话签名密钥 |
 | `ADMIN_CREDIT_TOKEN` | 必填后才启用管理员调分接口 | 管理员调分口令 |
+| `ADMIN_ALLOWED_IPS` | 空 | 可选，逗号分隔的管理员来源 IP 白名单 |
 | `AUTH_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
 
 表结构：
@@ -222,6 +223,19 @@ curl -X POST http://127.0.0.1:8787/api/admin/credits \
   -H "X-Admin-Token: $ADMIN_CREDIT_TOKEN" \
   -d '{"email":"user@example.com","delta":100,"reason":"manual top-up"}'
 ```
+
+管理员接口安全校验：
+
+- 默认关闭：`ADMIN_CREDIT_TOKEN` 未配置时，`/api/admin/credits` 返回 `404`，避免误开放。
+- 强口令：`ADMIN_CREDIT_TOKEN` 长度必须不少于 `32` 个 ASCII 字符；启动时若配置过短，打印告警，接口返回 `503`。
+- Header 鉴权：只接受 `X-Admin-Token`，不接受 query string token，避免 token 被代理、浏览器历史或日志记录。
+- 常量时间比较：用 `crypto.timingSafeEqual` 比较 token，减少时序侧信道。
+- 来源限制：如果配置 `ADMIN_ALLOWED_IPS`，请求来源 IP 不在白名单时返回 `403`。生产建议在 Nginx/Caddy 防火墙层也限制访问来源。
+- 方法限制：只允许 `POST`，不提供管理员页面，不把调分能力暴露到前端 UI。
+- 参数校验：`email` 必须是合法邮箱；`reason` 必填且长度 `1..200`；`delta` 必须是整数且范围 `-100000..100000`；`set_to` 必须是 `0..1000000`；`delta` 和 `set_to` 必须二选一。
+- 结果约束：调分后积分不能小于 `0`；不存在的邮箱返回 `404`，不自动创建账号。
+- 日志脱敏：日志只记录 `email`、`delta`/`set_to`、`reason`、操作者来源 IP 和 requestId，不记录 `X-Admin-Token`。
+- 审计流水：每次调分必须写入 `credit_ledger`，`actor` 为 `admin`，`reason` 保存管理员填写的原因。
 
 ## 文件规划
 
@@ -442,9 +456,16 @@ git commit -m "Gate image generation by credits"
 
 测试：
 
+- 未配置 `ADMIN_CREDIT_TOKEN` 返回 `404`
+- `ADMIN_CREDIT_TOKEN` 长度不足 `32` 时返回 `503`
 - 未带 `X-Admin-Token` 返回 `403`
+- `X-Admin-Token` 错误返回 `403`
+- 配置 `ADMIN_ALLOWED_IPS` 后，非白名单来源返回 `403`
 - token 正确时 `delta: 100` 增加积分
 - token 正确时 `set_to: 0` 设置积分
+- `delta` 和 `set_to` 同时出现返回 `400`
+- `reason` 缺失返回 `400`
+- 调分后积分小于 `0` 返回 `400`
 - 不存在邮箱返回 `404`
 
 - [ ] **Step 2: 跑测试并确认失败**
@@ -458,10 +479,15 @@ node --test tests/auth-proxy.test.mjs
 新增 `POST /api/admin/credits`：
 
 - 读取 `ADMIN_CREDIT_TOKEN`。
-- 未配置时返回 `404` 或 `503`，避免误开放。
+- 未配置时返回 `404`，避免误开放。
+- token 长度不足 `32` 时返回 `503`。
 - token 不匹配返回 `403`。
+- 用 `timingSafeEqual` 做 token 比较。
+- 配置 `ADMIN_ALLOWED_IPS` 时校验来源 IP。
 - body 必须包含 `email` 和 `reason`。
 - `delta` 与 `set_to` 二选一。
+- `delta` 和 `set_to` 必须满足管理员接口安全校验中的范围。
+- 不允许把用户积分调整到小于 `0`。
 - 调用 store 写入 `credit_ledger`，`actor` 为 `admin`。
 
 - [ ] **Step 4: 验证测试通过**
